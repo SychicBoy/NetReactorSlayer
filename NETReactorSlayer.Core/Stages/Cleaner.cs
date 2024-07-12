@@ -13,6 +13,7 @@
     along with NETReactorSlayer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using de4dot.blocks;
@@ -97,7 +98,11 @@ namespace NETReactorSlayer.Core.Stages
             if (Context.Options.KeepObfuscatorTypes)
                 return;
             foreach (var method in MethodsToRemove)
-                try { method.DeclaringType.Remove(method); } catch { }
+                try
+                {
+                    method.DeclaringType.Remove(method);
+                }
+                catch { }
 
             foreach (var typeDef in TypesToRemove.Select(type => type.ResolveTypeDef()))
                 try

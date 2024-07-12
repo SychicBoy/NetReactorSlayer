@@ -88,9 +88,10 @@ namespace NETReactorSlayer.Core.Helper
             if (DecrypterV4.CouldBeResourceDecrypter(DecrypterMethod, localTypes, AdditionalTypes))
                 return new DecrypterV4(DecrypterMethod);
 
-            return DecrypterV2.CouldBeResourceDecrypter(localTypes, AdditionalTypes)
-                ? new DecrypterV2(DecrypterMethod)
-                : null;
+            if (DecrypterV2.CouldBeResourceDecrypter(localTypes, AdditionalTypes))
+                return new DecrypterV2(DecrypterMethod);
+
+            return null;
         }
 
         public static bool IsKnownDecrypter(MethodDef method, IList<string> additionalTypes, bool checkResource)
@@ -427,12 +428,30 @@ namespace NETReactorSlayer.Core.Helper
                 var i = 0;
                 while (i + 8 < instrs.Count)
                 {
+                    int newEndIndex = -1;
+
                     if (instrs[i].OpCode.Code.Equals(Code.Conv_R_Un) &&
                         instrs[i + 1].OpCode.Code.Equals(Code.Conv_R8) &&
                         instrs[i + 2].OpCode.Code.Equals(Code.Conv_U4) &&
                         instrs[i + 3].OpCode.Code.Equals(Code.Add))
                     {
-                        var newEndIndex = i + 3;
+                        newEndIndex = i + 3;
+                    }
+
+                    if (newEndIndex < 0)
+                    {
+                        if (instrs[i].OpCode.Code.Equals(Code.Add) &&
+                            instrs[i + 1].OpCode.Code.Equals(Code.Stloc_S) &&
+                            instrs[i + 2].OpCode.Code.Equals(Code.Ldloc_S) &&
+                            instrs[i + 3].OpCode.Code.Equals(Code.Ldloc_S) &&
+                            instrs[i + 4].OpCode.Code.Equals(Code.Ldc_I4_1))
+                        {
+                            newEndIndex = i;
+                        }
+                    }
+
+                    if (newEndIndex >= 0)
+                    {
                         var newStartIndex = -1;
                         for (var x = newEndIndex; x > 0; x--)
                             if (instrs[x].OpCode.FlowControl != FlowControl.Next)
@@ -851,12 +870,30 @@ namespace NETReactorSlayer.Core.Helper
                 var i = 0;
                 while (i + 8 < instrs.Count)
                 {
+                    int newEndIndex = -1;
+
                     if (instrs[i].OpCode.Code.Equals(Code.Conv_R_Un) &&
                         instrs[i + 1].OpCode.Code.Equals(Code.Conv_R8) &&
                         instrs[i + 2].OpCode.Code.Equals(Code.Conv_U4) &&
                         instrs[i + 3].OpCode.Code.Equals(Code.Add))
                     {
-                        var newEndIndex = i + 3;
+                        newEndIndex = i + 3;
+                    }
+
+                    if (newEndIndex < 0)
+                    {
+                        if (instrs[i].OpCode.Code.Equals(Code.Add) &&
+                            instrs[i + 1].OpCode.Code.Equals(Code.Stloc_S) &&
+                            instrs[i + 2].OpCode.Code.Equals(Code.Ldloc_S) &&
+                            instrs[i + 3].OpCode.Code.Equals(Code.Ldloc_S) &&
+                            instrs[i + 4].OpCode.Code.Equals(Code.Ldc_I4_1))
+                        {
+                            newEndIndex = i;
+                        }
+                    }
+
+                    if (newEndIndex >= 0)
+                    {
                         var newStartIndex = -1;
                         for (var x = newEndIndex; x > 0; x--)
                             if (instrs[x].OpCode.FlowControl != FlowControl.Next)
