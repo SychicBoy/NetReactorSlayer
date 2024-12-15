@@ -124,8 +124,11 @@ namespace NETReactorSlayer.Core.Stages
             try { return QuickLz.Decompress(bytes); }
             catch
             {
-                try { return DeobUtils.Inflate(bytes, true); }
-                catch { return null; }
+                try { return DeobUtils.BrotliDecompress(bytes); }
+                catch {                
+                    try { return DeobUtils.Inflate(bytes, true); }
+                    catch { return null; }
+                }
             }
         }
 

@@ -85,23 +85,31 @@ namespace NETReactorSlayer.Core.Stages
 
         private bool Find2()
         {
-            var cctor = Context.Module.GlobalType.FindStaticConstructor();
-            if (cctor is not { HasBody: true } || !cctor.Body.HasInstructions)
-                return false;
-            foreach (var instr in cctor.Body.Instructions.Where(instr => instr.OpCode.Equals(OpCodes.Call)))
-                if (instr.Operand is MethodDef { DeclaringType: { }, HasBody: true } methodDef &&
-                    methodDef.Body.HasInstructions)
-                    if (DotNetUtils.GetMethod(methodDef.DeclaringType,
-                            "System.Security.Cryptography.SymmetricAlgorithm", "()") != null)
-                    {
-                        if (!EncryptedResource.IsKnownDecrypter(methodDef, Array.Empty<string>(), true))
-                            continue;
+            var staticConstructors = new[]
+            {
+                Context.Module.EntryPoint?.DeclaringType?.FindStaticConstructor(),
+                Context.Module.GlobalType.FindStaticConstructor()
+            };
 
-                        _encryptedResource = new EncryptedResource(Context, methodDef);
-                        if (_encryptedResource.EmbeddedResource != null)
-                            return true;
-                        _encryptedResource.Dispose();
-                    }
+            foreach (var cctor in staticConstructors)
+            {
+                if (cctor is not { HasBody: true } || !cctor.Body.HasInstructions)
+                    return false;
+                foreach (var instr in cctor.Body.Instructions.Where(instr => instr.OpCode.Equals(OpCodes.Call)))
+                    if (instr.Operand is MethodDef { DeclaringType: not null, HasBody: true } methodDef &&
+                        methodDef.Body.HasInstructions)
+                        if (DotNetUtils.GetMethod(methodDef.DeclaringType,
+                                "System.Security.Cryptography.SymmetricAlgorithm", "()") != null)
+                        {
+                            if (!EncryptedResource.IsKnownDecrypter(methodDef, Array.Empty<string>(), true))
+                                continue;
+
+                            _encryptedResource = new EncryptedResource(Context, methodDef);
+                            if (_encryptedResource.EmbeddedResource != null)
+                                return true;
+                            _encryptedResource.Dispose();
+                        }
+            }
 
             return false;
         }
@@ -134,6 +142,13 @@ namespace NETReactorSlayer.Core.Stages
                     for (var i = 0; i < decrypterMethod.Body.Instructions.Count; i++)
                         try
                         {
+                            var skip = CheckNet6Calls(decrypterMethod, i, method);
+                            if (skip)
+                            {
+                                popCallsCount = 4;
+                                break;
+                            }
+
                             if (!decrypterMethod.Body.Instructions[i].IsLdloc() ||
                                 !decrypterMethod.Body.Instructions[i + 1].OpCode.Equals(OpCodes.Callvirt) ||
                                 decrypterMethod.Body.Instructions[i + 1].Operand is not MethodDef calledMethod ||
@@ -144,7 +159,7 @@ namespace NETReactorSlayer.Core.Stages
                                 popCallsCount++;
                         }
                         catch { }
-
+                    
                     return true;
                 }
                 catch { }
@@ -152,11 +167,43 @@ namespace NETReactorSlayer.Core.Stages
             return false;
         }
 
+        private bool CheckNet6Calls(MethodDef decrypterMethod, int i, MethodDef method)
+        {
+            //.NET 6+ doesn't only pop 4 times, it assigns them and does some obfuscated things,
+            //but they don't seem to be important
+            var inst = decrypterMethod.Body.Instructions;
+            if (!inst[i].IsLdloc() ||
+                !inst[i + 1].OpCode.Equals(OpCodes.Callvirt) ||
+                inst[i + 1].Operand is not MethodDef calledMethod1 ||
+                !inst[i + 2].IsStloc() ||
+                
+                !inst[i + 3].IsLdloc() ||
+                !inst[i + 4].OpCode.Equals(OpCodes.Callvirt) ||
+                inst[i + 4].Operand is not MethodDef calledMethod2 ||
+                !inst[i + 5].OpCode.Equals(OpCodes.Stsfld) ||
+                
+                !inst[i + 6].IsLdloc() ||
+                !inst[i + 7].OpCode.Equals(OpCodes.Callvirt) ||
+                inst[i + 7].Operand is not MethodDef calledMethod3 ||
+                !inst[i + 8].OpCode.Equals(OpCodes.Pop) ||
+                
+                !inst[i + 9].IsLdloc() ||
+                !inst[i + 10].OpCode.Equals(OpCodes.Callvirt) ||
+                inst[i + 10].Operand is not MethodDef calledMethod4 ||
+                !inst[i + 11].IsStloc())
+                return false;
+
+            return MethodEqualityComparer.CompareDeclaringTypes.Equals(calledMethod1, method) &&
+                   MethodEqualityComparer.CompareDeclaringTypes.Equals(calledMethod2, method) &&
+                   MethodEqualityComparer.CompareDeclaringTypes.Equals(calledMethod3, method) &&
+                   MethodEqualityComparer.CompareDeclaringTypes.Equals(calledMethod4, method);
+        }
+
         private bool RestoreMethodsBody(byte[] bytes)
         {
             var dumpedMethods = new DumpedMethods();
             XorEncrypt(bytes, GetXorKey(_encryptedResource.DecrypterMethod));
-            var isFindDnrMethod = FindDnrCompileMethod(_encryptedResource.DecrypterMethod.DeclaringType) != null;
+            var isFindDnrMethod = FindDnrCompileMethod(_encryptedResource.DecrypterMethod) != null;
             var methodsDataReader = ByteArrayDataReaderFactory.CreateReader(bytes);
 
             int tmp;
@@ -328,15 +375,19 @@ namespace NETReactorSlayer.Core.Stages
                                           instrs[i + 8].OpCode.Code.Equals(Code.Call)).Any();
         }
 
-        private static CompileMethodType GetCompileMethodType(IMethod method)
+        private static CompileMethodType GetCompileMethodType(IMethod method, string paramStruct = null)
         {
             if (DotNetUtils.IsMethod(method, "System.UInt32",
                     "(System.UInt64&,System.IntPtr,System.IntPtr,System.UInt32,System.IntPtr&,System.UInt32&)"))
                 return CompileMethodType.V1;
-
-            return DotNetUtils.IsMethod(method, "System.UInt32",
-                "(System.IntPtr,System.IntPtr,System.IntPtr,System.UInt32,System.IntPtr,System.UInt32&)")
-                ? CompileMethodType.V2
+            
+            if (DotNetUtils.IsMethod(method, "System.UInt32",
+                    "(System.IntPtr,System.IntPtr,System.IntPtr,System.UInt32,System.IntPtr,System.UInt32&)"))
+                return CompileMethodType.V2;
+            
+            return paramStruct != null && DotNetUtils.IsMethod(method, "System.UInt32",
+                $"(System.IntPtr,System.IntPtr,{paramStruct}&,System.UInt32,System.IntPtr,System.UInt32&)")
+                ? CompileMethodType.V3
                 : CompileMethodType.Unknown;
         }
 
@@ -373,12 +424,39 @@ namespace NETReactorSlayer.Core.Stages
             return 0;
         }
 
-        private static MethodDef FindDnrCompileMethod(TypeDef type) =>
-            (from method in type.Methods
+        private static MethodDef FindDnrCompileMethod(MethodDef methodDef)
+        {
+            var type = methodDef.DeclaringType;
+            var methodCandidates = (from method in type.Methods
                 where method.IsStatic && method.Body != null
                 let sig = method.MethodSig
                 where sig != null && sig.Params.Count == 6
-                select method).FirstOrDefault(method => GetCompileMethodType(method) != CompileMethodType.Unknown);
+                select method).ToList();
+            var dnrCompileMethod = methodCandidates.FirstOrDefault(method => GetCompileMethodType(method) != CompileMethodType.Unknown);
+
+            if (dnrCompileMethod == null)
+            {
+                //.NET 6+ has a different compile method signature
+                var paramStruct = type.NestedTypes.FirstOrDefault(typeDef => 
+                    typeDef.Fields.Count == 4 && 
+                    typeDef.Fields[0].FieldType.FullName == "System.IntPtr" && 
+                    typeDef.Fields[1].FieldType.FullName == "System.IntPtr" && 
+                    typeDef.Fields[2].FieldType.FullName == "System.IntPtr" && 
+                    typeDef.Fields[3].FieldType.FullName == "System.Int32");
+
+                if (paramStruct != null)
+                {
+                    var operands = methodDef.Body.Instructions
+                        .Where(x => x.OpCode.Equals(OpCodes.Ldftn) && x.Operand is MethodDef)
+                        .Select(x => x.Operand);
+                    dnrCompileMethod = methodCandidates.Where(method =>
+                        GetCompileMethodType(method, paramStruct.FullName) != CompileMethodType.Unknown)
+                        .FirstOrDefault(x => operands.Contains(x));
+                }
+            }
+
+            return dnrCompileMethod;
+        }
 
         private static void PatchDwords(MyPeImage peImage, ref DataReader reader, int count)
         {
@@ -413,6 +491,6 @@ namespace NETReactorSlayer.Core.Stages
         private readonly short[] _nativeLdci40 = { 85, 139, 236, 51, 192, 93, 195 };
         private EncryptedResource _encryptedResource;
 
-        private enum CompileMethodType { Unknown, V1, V2 }
+        private enum CompileMethodType { Unknown, V1, V2, V3 }
     }
 }

@@ -35,7 +35,7 @@ namespace NETReactorSlayer.Core.Stages
                 return;
 
             var assemblies = new List<EmbeddedResource>();
-            foreach (var prefix in DotNetUtils.GetCodeStrings(_resolverMethod))
+            foreach (var prefix in DotNetUtils.GetCodeStrings(_resolverMethod).Distinct())
                 assemblies.AddRange(GetAssemblies(prefix));
             if (assemblies.Count < 1)
                 return;
@@ -115,7 +115,7 @@ namespace NETReactorSlayer.Core.Stages
         {
             var result = new List<EmbeddedResource>();
             if (string.IsNullOrEmpty(prefix))
-                return null;
+                return result;
             foreach (var rsrc in Context.Module.Resources)
             {
                 if (rsrc is not EmbeddedResource resource)

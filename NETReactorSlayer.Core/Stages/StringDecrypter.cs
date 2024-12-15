@@ -263,7 +263,7 @@ namespace NETReactorSlayer.Core.Stages
                             continue;
 
                         var methodDef = ((IMethod)method.Body.Instructions[i + 1].Operand).ResolveMethodDef();
-                        if (!methodDef.HasReturnType)
+                        if (methodDef is not {HasReturnType: true})
                             continue;
 
                         if (TypeEqualityComparer.Instance.Equals(method.DeclaringType, methodDef.DeclaringType))
